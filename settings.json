@@ -1,0 +1,14 @@
+{
+    "autoclose": false,
+    "colorscheme": "modus-vivendi",
+    "indentwrap": true,
+    "mkparents": true,
+    "reload": "auto",
+    "softwrap": true,
+    "truecolor": "on",
+    "wordwrap": true,
+    "aspell.check": "off",
+    "aspell.lang": "en_US",
+    "statusformatl": "$(filename)$(modified)| $(statuswc.wc)",
+    "statusformatr": "$(bind:ToggleKeyMenu): bindings, $(bind:ToggleHelp): help"
+}

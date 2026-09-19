@@ -1,0 +1,213 @@
+diff --git a/internal/config/settings.go b/internal/config/settings.go
+index 2f81583..b6684a0 100644
+--- a/internal/config/settings.go
++++ b/internal/config/settings.go
+@@ -72,6 +72,7 @@ var defaultCommonSettings = map[string]any{
+ 	"hltrailingws":    false,
+ 	"ignorecase":      true,
+ 	"incsearch":       true,
++	"indentwrap":      false,
+ 	"indentchar":      " ", // Deprecated
+ 	"keepautoindent":  false,
+ 	"matchbrace":      true,
+diff --git a/internal/display/bufwindow.go b/internal/display/bufwindow.go
+index 369ea35..b059368 100644
+--- a/internal/display/bufwindow.go
++++ b/internal/display/bufwindow.go
+@@ -56,7 +56,7 @@ func (w *BufWindow) SetBuffer(b *buffer.Buffer) {
+ 			}
+ 		}
+ 
+-		if option == "softwrap" || option == "wordwrap" {
++		if option == "softwrap" || option == "wordwrap" || option == "indentwrap" {
+ 			w.Relocate()
+ 			for _, c := range w.Buf.GetCursors() {
+ 				c.LastWrappedVisualX = c.GetVisualX(true)
+@@ -506,9 +506,14 @@ func (w *BufWindow) displayBuffer() {
+ 		} else {
+ 			vloc.X = w.gutterOffset
+ 		}
++		rowStartX := w.gutterOffset
+ 
+ 		bline := b.LineBytes(bloc.Y)
+ 		blineLen := util.CharacterCount(bline)
++		wrapIndent := 0
++		if softwrap {
++			wrapIndent = w.wrapIndentWidth(bline, tabsize)
++		}
+ 
+ 		leadingwsEnd := len(util.GetLeadingWhitespace(bline))
+ 		trailingwsStart := blineLen - util.CharacterCount(util.GetTrailingWhitespace(bline))
+@@ -686,6 +691,37 @@ func (w *BufWindow) displayBuffer() {
+ 			}
+ 		}
+ 
++		lineSpaceStyle := func(x int) tcell.Style {
++			style := config.DefStyle
++			if currentLine && b.Settings["cursorline"].(bool) && w.active {
++				if s, ok := config.Colorscheme["cursor-line"]; ok {
++					fg, _, _ := s.Decompose()
++					style = style.Background(fg)
++				}
++			}
++			if s, ok := config.Colorscheme["color-column"]; ok {
++				if colorcolumn != 0 && x-w.gutterOffset+w.StartCol == colorcolumn {
++					fg, _, _ := s.Decompose()
++					style = style.Background(fg)
++				}
++			}
++			return style
++		}
++
++		drawVirtualIndent := func() {
++			targetX := util.Min(w.gutterOffset+wrapIndent, maxWidth)
++			rowStartX = targetX
++			if vloc.Y < 0 {
++				vloc.X = targetX
++				return
++			}
++			for vloc.X < targetX {
++				style := lineSpaceStyle(vloc.X)
++				screen.SetContent(w.X+vloc.X, w.Y+vloc.Y, ' ', nil, style)
++				vloc.X++
++			}
++		}
++
+ 		wrap := func() {
+ 			vloc.X = 0
+ 
+@@ -704,6 +740,7 @@ func (w *BufWindow) displayBuffer() {
+ 			} else {
+ 				vloc.X = w.gutterOffset
+ 			}
++			drawVirtualIndent()
+ 		}
+ 
+ 		type glyph struct {
+@@ -754,7 +791,7 @@ func (w *BufWindow) displayBuffer() {
+ 			}
+ 
+ 			// If a word (or just a wide rune) does not fit in the window
+-			if vloc.X+wordwidth > maxWidth && vloc.X > w.gutterOffset {
++			if vloc.X+wordwidth > maxWidth && vloc.X > rowStartX {
+ 				for vloc.X < maxWidth {
+ 					draw(' ', nil, config.DefStyle, false, false, true)
+ 				}
+diff --git a/internal/display/softwrap.go b/internal/display/softwrap.go
+index 1460f88..ebbbf4e 100644
+--- a/internal/display/softwrap.go
++++ b/internal/display/softwrap.go
+@@ -67,6 +67,23 @@ type SoftWrap interface {
+ 	LocFromVLoc(vloc VLoc) buffer.Loc
+ }
+ 
++func (w *BufWindow) wrapIndentWidth(line []byte, tabsize int) int {
++	if !w.Buf.Settings["indentwrap"].(bool) || w.bufWidth <= 1 {
++		return 0
++	}
++
++	leadingws := util.GetLeadingWhitespace(line)
++	indent := util.StringWidth(leadingws, len(leadingws), tabsize)
++	return util.Min(indent, w.bufWidth-1)
++}
++
++func wrapRowStart(row, indent int) int {
++	if row == 0 {
++		return 0
++	}
++	return indent
++}
++
+ func (w *BufWindow) getVLocFromLoc(loc buffer.Loc) VLoc {
+ 	vloc := VLoc{SLoc: SLoc{loc.Y, 0}, VisualX: 0}
+ 
+@@ -82,6 +99,7 @@ func (w *BufWindow) getVLocFromLoc(loc buffer.Loc) VLoc {
+ 	tabsize := util.IntOpt(w.Buf.Settings["tabsize"])
+ 
+ 	line := w.Buf.LineBytes(loc.Y)
++	wrapIndent := w.wrapIndentWidth(line, tabsize)
+ 	x := 0
+ 	totalwidth := 0
+ 
+@@ -118,9 +136,10 @@ func (w *BufWindow) getVLocFromLoc(loc buffer.Loc) VLoc {
+ 		}
+ 
+ 		// If a word (or just a wide rune) does not fit in the window
+-		if vloc.VisualX+wordwidth > w.bufWidth && vloc.VisualX > 0 {
++		rowStart := wrapRowStart(vloc.Row, wrapIndent)
++		if vloc.VisualX+wordwidth > w.bufWidth && vloc.VisualX > rowStart {
+ 			vloc.Row++
+-			vloc.VisualX = 0
++			vloc.VisualX = wrapIndent
+ 		}
+ 
+ 		if x == loc.X {
+@@ -136,7 +155,7 @@ func (w *BufWindow) getVLocFromLoc(loc buffer.Loc) VLoc {
+ 
+ 		if vloc.VisualX >= w.bufWidth {
+ 			vloc.Row++
+-			vloc.VisualX = 0
++			vloc.VisualX = wrapIndent
+ 		}
+ 	}
+ 	return vloc
+@@ -153,6 +172,7 @@ func (w *BufWindow) getLocFromVLoc(svloc VLoc) buffer.Loc {
+ 	tabsize := util.IntOpt(w.Buf.Settings["tabsize"])
+ 
+ 	line := w.Buf.LineBytes(svloc.Line)
++	wrapIndent := w.wrapIndentWidth(line, tabsize)
+ 	vloc := VLoc{SLoc: SLoc{svloc.Line, 0}, VisualX: 0}
+ 
+ 	totalwidth := 0
+@@ -192,7 +212,8 @@ func (w *BufWindow) getLocFromVLoc(svloc VLoc) buffer.Loc {
+ 		}
+ 
+ 		// If a word (or just a wide rune) does not fit in the window
+-		if vloc.VisualX+wordwidth > w.bufWidth && vloc.VisualX > 0 {
++		rowStart := wrapRowStart(vloc.Row, wrapIndent)
++		if vloc.VisualX+wordwidth > w.bufWidth && vloc.VisualX > rowStart {
+ 			if vloc.Row == svloc.Row {
+ 				if wordwrap {
+ 					// it's a word, not a wide rune
+@@ -201,7 +222,7 @@ func (w *BufWindow) getLocFromVLoc(svloc VLoc) buffer.Loc {
+ 				return loc
+ 			}
+ 			vloc.Row++
+-			vloc.VisualX = 0
++			vloc.VisualX = wrapIndent
+ 		}
+ 
+ 		for i := range widths {
+@@ -217,7 +238,7 @@ func (w *BufWindow) getLocFromVLoc(svloc VLoc) buffer.Loc {
+ 
+ 		if vloc.VisualX >= w.bufWidth {
+ 			vloc.Row++
+-			vloc.VisualX = 0
++			vloc.VisualX = wrapIndent
+ 		}
+ 	}
+ 	return loc
+diff --git a/runtime/help/options.md b/runtime/help/options.md
+index d4832c5..75923bd 100644
+--- a/runtime/help/options.md
++++ b/runtime/help/options.md
+@@ -203,6 +203,11 @@ Here are the available options:
+ 
+     default value: `true`
+ 
++* `indentwrap`: when `softwrap` is enabled, start wrapped continuation rows at
++   the line's leading indentation.
++
++    default value: `false`
++
+ * `indentchar`: sets the character to be shown to display tab characters.
+    This option is **deprecated**, use the `tab` key in `showchars` option instead.
+ 
+@@ -582,6 +587,7 @@ so that you can see what the formatting should look like.
+     "hltrailingws": false,
+     "ignorecase": true,
+     "incsearch": true,
++    "indentwrap": false,
+     "indentchar": " ",
+     "infobar": true,
+     "initlua": true,

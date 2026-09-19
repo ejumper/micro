@@ -1,0 +1,492 @@
+diff --git a/internal/action/actions.go b/internal/action/actions.go
+index bcdc121..fa38826 100644
+--- a/internal/action/actions.go
++++ b/internal/action/actions.go
+@@ -454,39 +454,145 @@ func (h *BufPane) SelectSubWordLeft() bool {
+ 	return true
+ }
+ 
++// vRowBounds returns the buffer locations of the start and the end
++// (exclusive) of the visual (soft-wrapped) row containing loc. When softwrap
++// is disabled it falls back to the logical line bounds, and the end of the
++// last row of a line is always the logical line end, so the bounds never
++// cross logical lines.
++//
++// A loc that sits exactly on a wrap boundary (end of row N == start of
++// row N+1) is resolved to the following row, matching how the softwrap
++// display maps locations. As a consequence EndOfLine from a boundary steps
++// to the end of the next visual row, so repeated End presses walk down the
++// wrapped rows of a logical line.
++func (h *BufPane) vRowBounds(loc buffer.Loc) (buffer.Loc, buffer.Loc) {
++	lineLen := util.CharacterCount(h.Buf.LineBytes(loc.Y))
++	if !h.Buf.Settings["softwrap"].(bool) {
++		return buffer.Loc{X: 0, Y: loc.Y}, buffer.Loc{X: lineLen, Y: loc.Y}
++	}
++	vloc := h.VLocFromLoc(loc)
++	start := h.LocFromVLoc(display.VLoc{SLoc: vloc.SLoc, VisualX: 0})
++	end := h.LocFromVLoc(display.VLoc{SLoc: display.SLoc{Line: vloc.Line, Row: vloc.Row + 1}, VisualX: 0})
++	return start, end
++}
++
++// vRowStart returns the buffer location of the first character of the
++// visual row containing loc. If loc is already at that row's start it
++// returns the start of the previous visual row instead, so repeated Home
++// presses walk up the rows — including across hard line breaks: at the
++// start of a logical line's first row it continues on the previous logical
++// line's last visual row. Falls back to column 0 when softwrap is disabled.
++func (h *BufPane) vRowStart(loc buffer.Loc) buffer.Loc {
++	if !h.Buf.Settings["softwrap"].(bool) {
++		if loc.X == 0 && loc.Y > 0 {
++			return buffer.Loc{X: 0, Y: loc.Y - 1}
++		}
++		return buffer.Loc{X: 0, Y: loc.Y}
++	}
++	vloc := h.VLocFromLoc(loc)
++	start := h.LocFromVLoc(display.VLoc{SLoc: vloc.SLoc, VisualX: 0})
++	if loc.X == start.X {
++		if vloc.Row > 0 {
++			return h.LocFromVLoc(display.VLoc{SLoc: display.SLoc{Line: vloc.Line, Row: vloc.Row - 1}, VisualX: 0})
++		}
++		// At the start of the logical line's first row: continue on the
++		// previous logical line's last visual row.
++		if loc.Y > 0 {
++			prevEol := buffer.Loc{X: util.CharacterCount(h.Buf.LineBytes(loc.Y - 1)), Y: loc.Y - 1}
++			lastRow := h.VLocFromLoc(prevEol).Row
++			return h.LocFromVLoc(display.VLoc{SLoc: display.SLoc{Line: loc.Y - 1, Row: lastRow}, VisualX: 0})
++		}
++	}
++	return start
++}
++
++// vRowEnd returns the buffer location of the end (exclusive) of the visual
++// row containing loc. When loc is already at the end of its logical line's
++// last visual row it returns the end of the first visual row of the next
++// logical line instead, so repeated End presses walk down the rows —
++// including across hard line breaks. Falls back to the logical line end
++// when softwrap is disabled.
++func (h *BufPane) vRowEnd(loc buffer.Loc) buffer.Loc {
++	_, end := h.vRowBounds(loc)
++	if loc == end && loc.Y < h.Buf.LinesNum()-1 {
++		// Already at the end of the last visual row of this logical line:
++		// continue on the first visual row of the next logical line.
++		_, nextEnd := h.vRowBounds(buffer.Loc{X: 0, Y: loc.Y + 1})
++		return nextEnd
++	}
++	return end
++}
++
++// vRowStartOfText returns the location of the first non-whitespace
++// character of the visual row containing loc (the row start itself when the
++// row does not start with whitespace). Falls back to the first
++// non-whitespace character of the logical line when softwrap is disabled.
++func (h *BufPane) vRowStartOfText(loc buffer.Loc) buffer.Loc {
++	start, end := h.vRowBounds(loc)
++	line := h.Buf.LineBytes(loc.Y)
++	x := start.X
++	i := 0
++	for len(line) > 0 && i < end.X {
++		r, _, size := util.DecodeCharacter(line)
++		line = line[size:]
++		if i >= start.X {
++			if !util.IsWhitespace(r) {
++				return buffer.Loc{X: i, Y: loc.Y}
++			}
++			x = i + 1
++		}
++		i++
++	}
++	return buffer.Loc{X: x, Y: loc.Y}
++}
++
+ // StartOfText moves the cursor to the start of the text of the line
++// (with softwrap enabled: of the visual row the cursor is on)
+ func (h *BufPane) StartOfText() bool {
+ 	h.Cursor.Deselect(true)
+-	h.Cursor.StartOfText()
++	h.Cursor.Loc = h.vRowStartOfText(h.Cursor.Loc)
++	h.Cursor.StoreVisualX()
+ 	h.Relocate()
+ 	return true
+ }
+ 
+-// StartOfTextToggle toggles the cursor between the start of the text of the line
+-// and the start of the line
++// StartOfTextToggle toggles the cursor between the start of the text of the
++// line and the start of the line (with softwrap enabled: between the start
++// of the text of the visual row and the start of the visual row, stepping to
++// the previous visual row when already at the row start)
+ func (h *BufPane) StartOfTextToggle() bool {
+ 	h.Cursor.Deselect(true)
+-	if h.Cursor.IsStartOfText() {
+-		h.Cursor.Start()
++	textStart := h.vRowStartOfText(h.Cursor.Loc)
++	if h.Cursor.Loc == textStart {
++		h.Cursor.Loc = h.vRowStart(h.Cursor.Loc)
+ 	} else {
+-		h.Cursor.StartOfText()
++		h.Cursor.Loc = textStart
+ 	}
++	h.Cursor.StoreVisualX()
+ 	h.Relocate()
+ 	return true
+ }
+ 
+ // StartOfLine moves the cursor to the start of the line
++// (with softwrap enabled: of the visual row, stepping to the previous visual
++// row when already at the row start)
+ func (h *BufPane) StartOfLine() bool {
+ 	h.Cursor.Deselect(true)
+-	h.Cursor.Start()
++	h.Cursor.Loc = h.vRowStart(h.Cursor.Loc)
++	h.Cursor.StoreVisualX()
+ 	h.Relocate()
+ 	return true
+ }
+ 
+ // EndOfLine moves the cursor to the end of the line
++// (with softwrap enabled: of the visual row; a cursor already at a row end
++// is resolved to the next visual row, and at a logical line end the walk
++// continues on the next logical line's first visual row, so repeated End
++// presses traverse the buffer row by row)
+ func (h *BufPane) EndOfLine() bool {
+ 	h.Cursor.Deselect(true)
+-	h.Cursor.End()
++	h.Cursor.Loc = h.vRowEnd(h.Cursor.Loc)
++	h.Cursor.StoreVisualX()
+ 	h.Relocate()
+ 	return true
+ }
+@@ -499,49 +605,62 @@ func (h *BufPane) SelectLine() bool {
+ }
+ 
+ // SelectToStartOfText selects to the start of the text on the current line
++// (with softwrap enabled: of the visual row the cursor is on)
+ func (h *BufPane) SelectToStartOfText() bool {
+ 	if !h.Cursor.HasSelection() {
+ 		h.Cursor.OrigSelection[0] = h.Cursor.Loc
+ 	}
+-	h.Cursor.StartOfText()
++	h.Cursor.Loc = h.vRowStartOfText(h.Cursor.Loc)
++	h.Cursor.StoreVisualX()
+ 	h.Cursor.SelectTo(h.Cursor.Loc)
+ 	h.Relocate()
+ 	return true
+ }
+ 
+ // SelectToStartOfTextToggle toggles the selection between the start of the text
+-// on the current line and the start of the line
++// on the current line and the start of the current line (with softwrap
++// enabled: of the visual row, stepping to the previous visual row when
++// already at the row start)
+ func (h *BufPane) SelectToStartOfTextToggle() bool {
+ 	if !h.Cursor.HasSelection() {
+ 		h.Cursor.OrigSelection[0] = h.Cursor.Loc
+ 	}
+-	if h.Cursor.IsStartOfText() {
+-		h.Cursor.Start()
++	textStart := h.vRowStartOfText(h.Cursor.Loc)
++	if h.Cursor.Loc == textStart {
++		h.Cursor.Loc = h.vRowStart(h.Cursor.Loc)
+ 	} else {
+-		h.Cursor.StartOfText()
++		h.Cursor.Loc = textStart
+ 	}
++	h.Cursor.StoreVisualX()
+ 	h.Cursor.SelectTo(h.Cursor.Loc)
+ 	h.Relocate()
+ 	return true
+ }
+ 
+ // SelectToStartOfLine selects to the start of the current line
++// (with softwrap enabled: of the visual row, stepping to the previous visual
++// row when already at the row start)
+ func (h *BufPane) SelectToStartOfLine() bool {
+ 	if !h.Cursor.HasSelection() {
+ 		h.Cursor.OrigSelection[0] = h.Cursor.Loc
+ 	}
+-	h.Cursor.Start()
++	h.Cursor.Loc = h.vRowStart(h.Cursor.Loc)
++	h.Cursor.StoreVisualX()
+ 	h.Cursor.SelectTo(h.Cursor.Loc)
+ 	h.Relocate()
+ 	return true
+ }
+ 
+ // SelectToEndOfLine selects to the end of the current line
++// (with softwrap enabled: of the visual row; a cursor already at a row end
++// is resolved to the next visual row, so repeated presses walk down the
++// wrapped rows)
+ func (h *BufPane) SelectToEndOfLine() bool {
+ 	if !h.Cursor.HasSelection() {
+ 		h.Cursor.OrigSelection[0] = h.Cursor.Loc
+ 	}
+-	h.Cursor.End()
++	h.Cursor.Loc = h.vRowEnd(h.Cursor.Loc)
++	h.Cursor.StoreVisualX()
+ 	h.Cursor.SelectTo(h.Cursor.Loc)
+ 	h.Relocate()
+ 	return true
+diff --git a/internal/action/actions_softline_test.go b/internal/action/actions_softline_test.go
+new file mode 100644
+index 0000000..7321684
+--- /dev/null
++++ b/internal/action/actions_softline_test.go
+@@ -0,0 +1,258 @@
++package action
++
++import (
++	"testing"
++
++	lua "github.com/yuin/gopher-lua"
++	"github.com/zyedidia/micro/v2/internal/buffer"
++	"github.com/zyedidia/micro/v2/internal/config"
++	"github.com/zyedidia/micro/v2/internal/display"
++	ulua "github.com/zyedidia/micro/v2/internal/lua"
++	"github.com/zyedidia/micro/v2/internal/util"
++)
++
++func init() {
++	ulua.L = lua.NewState()
++	config.InitRuntimeFiles(false)
++	config.InitGlobalSettings()
++}
++
++// newSoftlineTestPane builds a BufPane viewing a buffer through a
++// BufWindow of the given width, with softwrap (and optionally wordwrap
++// and indentwrap) enabled, so the vRow* helpers can be exercised without
++// a screen.
++func newSoftlineTestPane(text string, width int, wordwrap, indentwrap bool) *BufPane {
++	buf := buffer.NewBufferFromString(text, "", buffer.BTDefault)
++	w := display.NewBufWindow(0, 0, width, 20, buf)
++	w.Buf.Settings["softwrap"] = true
++	w.Buf.Settings["wordwrap"] = wordwrap
++	w.Buf.Settings["indentwrap"] = indentwrap
++	w.Resize(width, 20) // exported path to updateDisplayInfo(): computes bufWidth, normally done at display time
++	h := new(BufPane)
++	h.BWindow = w
++	h.Buf = buf
++	h.Cursor = buf.GetActiveCursor()
++	return h
++}
++
++func TestVRowBoundsNoWrap(t *testing.T) {
++	h := newSoftlineTestPane("short line\n", 80, true, false)
++	start, end := h.vRowBounds(buffer.Loc{X: 5, Y: 0})
++	if start != (buffer.Loc{X: 0, Y: 0}) || end != (buffer.Loc{X: 10, Y: 0}) {
++		t.Fatalf("vRowBounds = %v, %v; want 0,0 and 10,0", start, end)
++	}
++}
++
++func TestVRowEndOfLineWalksDownRows(t *testing.T) {
++	// 20 visible columns, wordwrap: the line wraps into several rows whose
++	// boundaries are derived from the softwrap map itself.
++	h := newSoftlineTestPane("alpha bravo charlie delta echo foxtrot golf hotel", 20, true, false)
++	lineLen := 49
++
++	// Expected row ends (each row's end == next row's start, last row ends at EOL)
++	var rowEnds []int
++	for row := 0; ; row++ {
++		end := h.LocFromVLoc(display.VLoc{SLoc: display.SLoc{Line: 0, Row: row + 1}, VisualX: 0}).X
++		rowEnds = append(rowEnds, end)
++		if end == lineLen {
++			break
++		}
++	}
++	if len(rowEnds) < 3 {
++		t.Fatalf("expected >= 3 visual rows, got %v", rowEnds)
++	}
++
++	// Repeated End walks through every row end in order, then stays at EOL
++	h.Cursor.Loc = buffer.Loc{X: 3, Y: 0}
++	for i, want := range rowEnds {
++		h.EndOfLine()
++		if h.Cursor.Loc != (buffer.Loc{X: want, Y: 0}) {
++			t.Fatalf("End#%d = %v; want X=%d (row ends %v)", i+1, h.Cursor.Loc, want, rowEnds)
++		}
++	}
++	h.EndOfLine()
++	if h.Cursor.Loc != (buffer.Loc{X: lineLen, Y: 0}) {
++		t.Fatalf("End at EOL = %v; want X=%d (stay)", h.Cursor.Loc, lineLen)
++	}
++}
++
++func TestVRowStartWalksUpRows(t *testing.T) {
++	h := newSoftlineTestPane("alpha bravo charlie delta echo foxtrot golf hotel", 20, true, false)
++	lineLen := util.CharacterCount(h.Buf.LineBytes(0))
++
++	// Expected row starts, walking up from the last row to row 0
++	var rowStarts []int
++	for row := 0; ; row++ {
++		start := h.LocFromVLoc(display.VLoc{SLoc: display.SLoc{Line: 0, Row: row}, VisualX: 0}).X
++		if start == lineLen {
++			break
++		}
++		rowStarts = append(rowStarts, start)
++	}
++	// reverse: walk-down order is ascending starts; Home walks descending
++	for i, j := 0, len(rowStarts)-1; i < j; i, j = i+1, j-1 {
++		rowStarts[i], rowStarts[j] = rowStarts[j], rowStarts[i]
++	}
++
++	h.Cursor.Loc = buffer.Loc{X: lineLen, Y: 0}
++	for i, want := range rowStarts {
++		h.StartOfLine()
++		if h.Cursor.Loc != (buffer.Loc{X: want, Y: 0}) {
++			t.Fatalf("StartOfLine#%d = %v; want X=%d (row starts %v)", i+1, h.Cursor.Loc, want, rowStarts)
++		}
++	}
++	h.StartOfLine() // at row 0 start -> stays
++	if h.Cursor.Loc != (buffer.Loc{X: 0, Y: 0}) {
++		t.Fatalf("StartOfLine at row 0 = %v; want X=0 (stay)", h.Cursor.Loc)
++	}
++}
++
++func TestVRowWalkCrossesLogicalLines(t *testing.T) {
++	h := newSoftlineTestPane("first logical line that is quite long and will wrap here\nshort\nsecond logical line", 20, true, false)
++
++	// The first End from mid-row stays within its own logical line
++	h.Cursor.Loc = buffer.Loc{X: 3, Y: 0}
++	h.EndOfLine()
++	if h.Cursor.Loc.Y != 0 {
++		t.Fatalf("first End crossed to line %d; want to stay on line 0", h.Cursor.Loc.Y)
++	}
++
++	// Repeated End walks across all logical lines to the buffer end, then stays
++	var path []buffer.Loc
++	for i := 0; i < 20; i++ {
++		h.EndOfLine()
++		path = append(path, h.Cursor.Loc)
++		if len(path) >= 2 && path[len(path)-1] == path[len(path)-2] {
++			break
++		}
++	}
++	if len(path) < 3 {
++		t.Fatalf("expected a multi-step walk, got %v", path)
++	}
++	if last := path[len(path)-1]; last != (buffer.Loc{X: 19, Y: 2}) {
++		t.Fatalf("End walk ended at %v; want the buffer end 19,2 (path %v)", last, path)
++	}
++	// reaching line 2 from line 0 proves the walk crossed logical lines
++	crossed := false
++	for i := 1; i < len(path); i++ {
++		if path[i].Y != path[i-1].Y {
++			crossed = true
++		}
++	}
++	if !crossed {
++		t.Fatalf("End walk never crossed a logical line: %v", path)
++	}
++
++	// Repeated Home walks all the way back to (0,0), then stays
++	hpath := []buffer.Loc{}
++	for i := 0; i < 20; i++ {
++		h.StartOfLine()
++		hpath = append(hpath, h.Cursor.Loc)
++		if len(hpath) >= 2 && hpath[len(hpath)-1] == hpath[len(hpath)-2] {
++			break
++		}
++	}
++	if last := hpath[len(hpath)-1]; last != (buffer.Loc{X: 0, Y: 0}) {
++		t.Fatalf("Home walk ended at %v; want 0,0 (path %v)", last, hpath)
++	}
++}
++
++func TestVRowCrossesEmptyLines(t *testing.T) {
++	// No wrapping at width 40: crossing is purely about hard line breaks
++	h := newSoftlineTestPane("aaaa\n\nbbbb", 40, true, false)
++
++	h.Cursor.Loc = buffer.Loc{X: 4, Y: 0} // EOL of line 0
++	h.EndOfLine()
++	if h.Cursor.Loc != (buffer.Loc{X: 0, Y: 1}) {
++		t.Fatalf("End at EOL = %v; want 0,1 (empty line row end)", h.Cursor.Loc)
++	}
++	h.EndOfLine()
++	if h.Cursor.Loc != (buffer.Loc{X: 4, Y: 2}) {
++		t.Fatalf("End on empty line = %v; want 4,2 (next line EOL)", h.Cursor.Loc)
++	}
++	h.EndOfLine()
++	if h.Cursor.Loc != (buffer.Loc{X: 4, Y: 2}) {
++		t.Fatalf("End at buffer end = %v; want to stay at 4,2", h.Cursor.Loc)
++	}
++
++	h.StartOfLine() // start of "bbbb"
++	if h.Cursor.Loc != (buffer.Loc{X: 0, Y: 2}) {
++		t.Fatalf("Home mid-line = %v; want 0,2", h.Cursor.Loc)
++	}
++	h.StartOfLine() // at row start -> cross to the empty line
++	if h.Cursor.Loc != (buffer.Loc{X: 0, Y: 1}) {
++		t.Fatalf("Home at row start = %v; want 0,1 (empty line)", h.Cursor.Loc)
++	}
++	h.StartOfLine() // cross to line 0 start
++	if h.Cursor.Loc != (buffer.Loc{X: 0, Y: 0}) {
++		t.Fatalf("Home = %v; want 0,0", h.Cursor.Loc)
++	}
++	h.StartOfLine()
++	if h.Cursor.Loc != (buffer.Loc{X: 0, Y: 0}) {
++		t.Fatalf("Home at buffer start = %v; want to stay at 0,0", h.Cursor.Loc)
++	}
++}
++
++func TestVRowStartOfTextRowScoped(t *testing.T) {
++	// Row 0 is indented; the toggle must jump between first non-whitespace
++	// and column 0, and repeated Home must not leave the row bounds.
++	h := newSoftlineTestPane("    alpha bravo charlie delta echo foxtrot golf\n", 20, true, false)
++
++	h.Cursor.Loc = buffer.Loc{X: 10, Y: 0}
++	h.StartOfTextToggle()
++	if h.Cursor.Loc.X != 4 {
++		t.Fatalf("toggle #1 = %d; want 4 (first non-ws)", h.Cursor.Loc.X)
++	}
++	h.StartOfTextToggle()
++	if h.Cursor.Loc.X != 0 {
++		t.Fatalf("toggle #2 = %d; want 0 (row start)", h.Cursor.Loc.X)
++	}
++	h.StartOfTextToggle()
++	if h.Cursor.Loc.X != 4 {
++		t.Fatalf("toggle #3 = %d; want 4 again", h.Cursor.Loc.X)
++	}
++}
++
++func TestVRowIndentwrapContinuation(t *testing.T) {
++	// indentwrap shortens the usable width of continuation rows, which moves
++	// the wrap boundaries; the walk must still visit the map's own boundaries.
++	h := newSoftlineTestPane("    alpha bravo charlie delta echo foxtrot golf hotel india\n", 20, true, true)
++	lineLen := util.CharacterCount(h.Buf.LineBytes(0))
++
++	type bound struct{ start, end int }
++	var rows []bound
++	for row := 0; ; row++ {
++		s := h.LocFromVLoc(display.VLoc{SLoc: display.SLoc{Line: 0, Row: row}, VisualX: 0}).X
++		e := h.LocFromVLoc(display.VLoc{SLoc: display.SLoc{Line: 0, Row: row + 1}, VisualX: 0}).X
++		rows = append(rows, bound{s, e})
++		if e == lineLen {
++			break
++		}
++	}
++	if len(rows) < 3 {
++		t.Fatalf("expected >= 3 visual rows with indentwrap, got %v", rows)
++	}
++
++	// End walk visits every row end in order
++	h.Cursor.Loc = buffer.Loc{X: 5, Y: 0}
++	for i, b := range rows {
++		h.EndOfLine()
++		if h.Cursor.Loc.X != b.end {
++			t.Fatalf("End#%d = %d; want %d (rows %v)", i+1, h.Cursor.Loc.X, b.end, rows)
++		}
++	}
++	// Home walk visits every row start in reverse
++	for i := len(rows) - 1; i >= 0; i-- {
++		h.StartOfLine()
++		if h.Cursor.Loc.X != rows[i].start {
++			t.Fatalf("Home step %d = %d; want %d (rows %v)", len(rows)-1-i, h.Cursor.Loc.X, rows[i].start, rows)
++		}
++	}
++}
++
++// getRowCountForTest exposes the visual row count of a logical line.
++func (h *BufPane) getRowCountForTest(line int) int {
++	// use the character count like the display does
++	eol := buffer.Loc{X: util.CharacterCount(h.Buf.LineBytes(line)), Y: line}
++	return h.VLocFromLoc(eol).Row + 1
++}

@@ -1,0 +1,9 @@
+# micro runtime state — per machine, never synced
+/buffers/
+/backups/
+
+# plugins are installed per machine via the plugin manager
+/plug/
+
+# machine-local colorscheme: differs per machine, unused (see Guides mdhead-title.md)
+/colorschemes/alts.micro

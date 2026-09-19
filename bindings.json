@@ -1,0 +1,19 @@
+{
+    "\u001b[27;2;13~": "InsertNewline",
+    "Alt-/": "lua:comment.comment",
+    "Alt-Backspace": "DeleteWordLeft",
+    "CtrlAltT": "lua:aspell.togglecheck",
+    "Ctrl-t": "lua:aspell.acceptsug",
+    "Ctrl-w": "DeleteWordLeft",
+    "CtrlAltZ": "Suspend",
+    "CtrlDelete": "DeleteWordRight",
+    "CtrlShiftEnd": "SelectToEnd",
+    "CtrlShiftHome": "SelectToStart",
+    "CtrlUnderscore": "lua:comment.comment",
+    "CtrlV": "Paste",
+    "F4": "command:jumptag",
+    "PageDown": "ParagraphNext",
+    "PageUp": "ParagraphPrevious",
+    "ShiftPageUp": "SelectToParagraphPrevious",
+    "ShiftPageDown": "SelectToParagraphNext"
+}

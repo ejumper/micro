@@ -1,0 +1,40 @@
+color-link default "#ffffff,none"
+color-link line-number "#989898,none"
+color-link current-line-number "bold #00d3d0,none"
+color-link statusline "#000000,#79a8ff"
+color-link selection "#000000,#535353"
+# markdown text layers. `default` is intentionally NOT touched: normal markdown
+# prose gets its color from the `md-normal` syntax group so other filetypes keep
+# the stock white. Emphasis (bold / italic / bold-italic) is pinned to pure white
+# so it pops against the #f2f2f2 body text.
+color-link italic-text "italic #ffffff"
+color-link bold-text "bold #ffffff"
+color-link bold-italic "bold italic #ffffff"
+color-link md-normal "#f2f2f2,none"
+# markdown headers: bold+italic+underlined; h1 additionally gets a full-row
+# underline fill from the patched micro build. h2 keeps the plain blue, h3-h6
+# use bright blue (ANSI 12).
+color-link headline "bold italic underline blue"
+color-link headline-2 "bold italic underline blue"
+color-link headline-3-6 "bold italic underline brightblue"
+# fenced code blocks + inline code: ANSI green
+color-link code-inline "green,none"
+color-link code-block "green,none"
+# xml/html tag markup (<tag>, </tag>, <tag/>): ANSI blue
+color-link xml-tag "blue,none"
+
+color-link keyword "bold #feacd0,none"
+color-link statement "bold #feacd0,none"
+color-link type "#00c06f,none"
+color-link constant "#b6a0ff,none"
+color-link literal "#b6a0ff,none"
+color-link string "#6ae4b9,none"
+color-link stringescape "bold #fec43f,none"
+color-link comment "italic #989898,none"
+color-link preproc "#00d3d0,none"
+color-link function "#79a8ff,none"
+color-link special "#f78fe7,none"
+color-link todo "bold #d0bc00,none"
+color-link error "#ff5f59,none"
+color-link diffadd "#6ae4b9,none"
+color-link diffdelete "#ff5f59,none"

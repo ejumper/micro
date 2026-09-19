@@ -1,0 +1,125 @@
+diff --git a/internal/display/bufwindow.go b/internal/display/bufwindow.go
+index b059368..7703f57 100644
+--- a/internal/display/bufwindow.go
++++ b/internal/display/bufwindow.go
+@@ -511,6 +511,7 @@ func (w *BufWindow) displayBuffer() {
+ 		bline := b.LineBytes(bloc.Y)
+ 		blineLen := util.CharacterCount(bline)
+ 		wrapIndent := 0
++		mdH1Line := isMdH1Line(b, bloc.Y)
+ 		if softwrap {
+ 			wrapIndent = w.wrapIndentWidth(bline, tabsize)
+ 		}
+@@ -741,6 +742,16 @@ func (w *BufWindow) displayBuffer() {
+ 				vloc.X = w.gutterOffset
+ 			}
+ 			drawVirtualIndent()
++			// Pre-fill the rest of the wrapped row with the h1 style;
++			// content drawn afterwards overwrites it cell by cell, so any
++			// leftover cells keep the underline fill.
++			if mdH1Line {
++				h1Style := mdH1FillStyle()
++				for vloc.X < maxWidth {
++					screen.SetContent(w.X+vloc.X, w.Y+vloc.Y, ' ', nil, h1Style)
++					vloc.X++
++				}
++			}
+ 		}
+ 
+ 		type glyph struct {
+@@ -842,6 +853,9 @@ func (w *BufWindow) displayBuffer() {
+ 		}
+ 
+ 		style := config.DefStyle
++		if mdH1Line {
++			style = mdH1FillStyle()
++		}
+ 		for _, c := range cursors {
+ 			if b.Settings["cursorline"].(bool) && w.active &&
+ 				!c.HasSelection() && c.Y == bloc.Y {
+@@ -864,7 +878,13 @@ func (w *BufWindow) displayBuffer() {
+ 
+ 		if vloc.X != maxWidth {
+ 			// Display newline within a selection
+-			drawrune, drawstyle, preservebg := getRuneStyle(' ', config.DefStyle, 0, totalwidth, true)
++			eolStyle := config.DefStyle
++			if mdH1Line {
++				// Use the h1 style for the newline cell too so the underline
++				// is continuous with the trailing fill (no gap after the text)
++				eolStyle = mdH1FillStyle()
++			}
++			drawrune, drawstyle, preservebg := getRuneStyle(' ', eolStyle, 0, totalwidth, true)
+ 			draw(drawrune, nil, drawstyle, true, true, preservebg)
+ 		}
+ 
+@@ -938,3 +958,47 @@ func (w *BufWindow) Display() {
+ 	w.displayScrollBar()
+ 	w.displayBuffer()
+ }
++
++// mdHeaderLevel returns the ATX heading level (1-6) of a markdown buffer
++// line, or 0 if the line is not a heading. A heading needs at least one
++// character of content after the "# " marker.
++func mdHeaderLevel(line []byte) int {
++	n := 0
++	for n < len(line) && line[n] == '#' {
++		n++
++	}
++	if n >= 1 && n <= 6 && n < len(line) && line[n] == ' ' &&
++		n+1 < len(line) && line[n+1] != ' ' {
++		return n
++	}
++	return 0
++}
++
++// isMdH1Line reports whether buffer line y is a markdown h1 heading that
++// should get the full-row underline fill. The syntax engine's group for the
++// first character must be "headline" — this excludes lines inside fenced
++// code blocks, which the regex alone cannot do.
++func isMdH1Line(b *buffer.Buffer, y int) bool {
++	if ft, ok := b.Settings["filetype"].(string); !ok || ft != "markdown" {
++		return false
++	}
++	if mdHeaderLevel(b.LineBytes(y)) != 1 {
++		return false
++	}
++	group, ok := b.Match(y)[0]
++	return ok && group.String() == "headline"
++}
++
++// mdH1FillStyle is the style used to pad the rest of an h1 line so its
++// underline spans the full editor width. The foreground color follows the
++// "headline" colorscheme group, defaulting to blue (ANSI SGR 34).
++func mdH1FillStyle() tcell.Style {
++	style := config.DefStyle.Underline(true)
++	if s, ok := config.Colorscheme["headline"]; ok {
++		fg, _, _ := s.Decompose()
++		style = style.Foreground(fg)
++	} else {
++		style = style.Foreground(tcell.ColorBlue)
++	}
++	return style
++}
+diff --git a/internal/screen/screen.go b/internal/screen/screen.go
+index f8f9136..072a648 100644
+--- a/internal/screen/screen.go
++++ b/internal/screen/screen.go
+@@ -2,6 +2,7 @@ package screen
+ 
+ import (
+ 	"errors"
++	"fmt"
+ 	"log"
+ 	"os"
+ 	"sync"
+@@ -221,6 +222,10 @@ func Init() error {
+ 		return err
+ 	}
+ 
++	// Set the window/tab title to plain "micro" (the tcell fork used here
++	// does not expose Screen.SetTitle, so emit the OSC 0 sequence directly).
++	fmt.Fprintf(os.Stdout, "\x1b]0;micro\x07")
++
+ 	Screen.SetPaste(config.GetGlobalOption("paste").(bool))
+ 
+ 	// restore TERM

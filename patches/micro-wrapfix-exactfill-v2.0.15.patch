@@ -1,0 +1,299 @@
+diff --git a/internal/display/bufwindow.go b/internal/display/bufwindow.go
+index 7703f57..d561932 100644
+--- a/internal/display/bufwindow.go
++++ b/internal/display/bufwindow.go
+@@ -842,7 +842,11 @@ func (w *BufWindow) displayBuffer() {
+ 			if vloc.X >= maxWidth {
+ 				if !softwrap {
+ 					break
+-				} else {
++				} else if len(line) > 0 {
++					// Wrap only when content remains on this line. When the
++					// line ends exactly at the window edge there is no next
++					// row: advancing to an extra empty row would draw a
++					// phantom blank row below this line.
+ 					vloc.Y++
+ 					if vloc.Y >= w.bufHeight {
+ 						break
+@@ -886,6 +890,15 @@ func (w *BufWindow) displayBuffer() {
+ 			}
+ 			drawrune, drawstyle, preservebg := getRuneStyle(' ', eolStyle, 0, totalwidth, true)
+ 			draw(drawrune, nil, drawstyle, true, true, preservebg)
++		} else if softwrap && vloc.Y >= 0 {
++			// The line fills the row exactly, so there is no trailing cell
++			// for an end-of-line cursor. Draw it on the last cell of the row
++			// instead of on a phantom empty row below.
++			for _, c := range cursors {
++				if !c.HasSelection() && c.X == bloc.X && c.Y == bloc.Y {
++					w.showCursor(w.X+vloc.X-1, w.Y+vloc.Y, c.Num == 0)
++				}
++			}
+ 		}
+ 
+ 		bloc.X = w.StartCol
+diff --git a/internal/display/softwrap.go b/internal/display/softwrap.go
+index ebbbf4e..3c2607e 100644
+--- a/internal/display/softwrap.go
++++ b/internal/display/softwrap.go
+@@ -153,7 +153,10 @@ func (w *BufWindow) getVLocFromLoc(loc buffer.Loc) VLoc {
+ 		wordwidth = 0
+ 		wordoffset = 0
+ 
+-		if vloc.VisualX >= w.bufWidth {
++		if vloc.VisualX >= w.bufWidth && len(line) > 0 {
++			// Content remains on this line: the next character starts the
++			// next row. At the end of the line there is no next row, so do
++			// not report an extra (phantom) row.
+ 			vloc.Row++
+ 			vloc.VisualX = wrapIndent
+ 		}
+diff --git a/internal/display/softwrap_test.go b/internal/display/softwrap_test.go
+new file mode 100644
+index 0000000..e62183c
+--- /dev/null
++++ b/internal/display/softwrap_test.go
+@@ -0,0 +1,244 @@
++package display
++
++import (
++	"strings"
++	"testing"
++
++	lua "github.com/yuin/gopher-lua"
++	"github.com/zyedidia/micro/v2/internal/buffer"
++	"github.com/zyedidia/micro/v2/internal/config"
++	ulua "github.com/zyedidia/micro/v2/internal/lua"
++)
++
++func init() {
++	// buffer.NewBuffer runs plugin hooks that need a Lua runtime.
++	ulua.L = lua.NewState()
++	config.InitRuntimeFiles(false)
++	config.InitGlobalSettings()
++}
++
++// newTestWindow builds a BufWindow whose bufWidth equals width exactly
++// (ruler and scrollbar off), usable with the softwrap position mapping
++// helpers without a screen.
++func newTestWindow(text string, width int) *BufWindow {
++	buf := buffer.NewBufferFromString(text, "", buffer.BTDefault)
++	buf.Settings["ruler"] = false
++	buf.Settings["scrollbar"] = false
++	buf.Settings["softwrap"] = true
++	buf.Settings["wordwrap"] = false
++	buf.Settings["indentwrap"] = false
++	w := NewBufWindow(0, 0, width, 20, buf)
++	w.Resize(width, 20)
++	return w
++}
++
++func setBool(w *BufWindow, key string, val bool) {
++	w.Buf.Settings[key] = val
++}
++
++// A line whose visible width exactly equals the pane width must occupy
++// exactly one row: no trailing phantom row, and the following line starts
++// on the very next row. This is the display-side half of the exact-fill
++// fix (the drawing side lives in bufwindow.go).
++func TestExactFillLineHasNoPhantomRow(t *testing.T) {
++	line := strings.Repeat("x", 40)
++	w := newTestWindow("abc\n"+line+"\ndef\n", 40)
++	setBool(w, "wordwrap", false)
++	setBool(w, "indentwrap", false)
++
++	// End of the exact-fill line maps onto its own row.
++	v := w.getVLocFromLoc(buffer.Loc{X: 40, Y: 1})
++	if v.Row != 0 || v.VisualX != 40 {
++		t.Fatalf("end of exact-fill line: got Row=%d VisualX=%d, want Row=0 VisualX=40", v.Row, v.VisualX)
++	}
++
++	// The row count of the exact-fill line is 1.
++	if rc := w.getRowCount(1); rc != 1 {
++		t.Fatalf("getRowCount(exact-fill line) = %d, want 1", rc)
++	}
++
++	// The next line starts immediately on the following global row: the
++	// vertical distance from the buffer start to line 2 is exactly 2 rows
++	// (with the old phantom-row behavior it was 3).
++	if d := w.Diff(SLoc{Line: 0, Row: 0}, SLoc{Line: 2, Row: 0}); d != 2 {
++		t.Fatalf("Diff(0:0 -> 2:0) = %d, want 2", d)
++	}
++}
++
++// Word-wrapped exact-fill: the last word fits exactly to the window edge
++// and the line must still occupy a single row.
++func TestExactFillWithWordWrap(t *testing.T) {
++	words := []string{"aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff", "gggg", "hhhhh"}
++	line := strings.Join(words, " ") // 4*7 + 5 + 7 spaces = 40 columns
++	if len(line) != 40 {
++		t.Fatalf("test line is %d cols, want 40", len(line))
++	}
++	w := newTestWindow(line+"\nnext\n", 40)
++	setBool(w, "wordwrap", true)
++	setBool(w, "indentwrap", false)
++
++	v := w.getVLocFromLoc(buffer.Loc{X: 40, Y: 0})
++	if v.Row != 0 || v.VisualX != 40 {
++		t.Fatalf("end of word-wrapped exact-fill line: got Row=%d VisualX=%d, want Row=0 VisualX=40", v.Row, v.VisualX)
++	}
++	if rc := w.getRowCount(0); rc != 1 {
++		t.Fatalf("getRowCount = %d, want 1", rc)
++	}
++}
++
++// Regular mid-line wrapping must be unaffected: rows break at the window
++// edge whenever more content remains.
++func TestMidLineWrapStillWraps(t *testing.T) {
++	line := strings.Repeat("x", 100)
++	w := newTestWindow(line+"\n", 40)
++	setBool(w, "wordwrap", false)
++	setBool(w, "indentwrap", false)
++
++	cases := []struct {
++		x         int
++		row, visX int
++	}{
++		{0, 0, 0},
++		{39, 0, 39},
++		{40, 1, 0},
++		{80, 2, 0},
++		{100, 2, 20},
++	}
++	for _, c := range cases {
++		v := w.getVLocFromLoc(buffer.Loc{X: c.x, Y: 0})
++		if v.Row != c.row || v.VisualX != c.visX {
++			t.Fatalf("x=%d: got Row=%d VisualX=%d, want Row=%d VisualX=%d", c.x, v.Row, v.VisualX, c.row, c.visX)
++		}
++	}
++	if rc := w.getRowCount(0); rc != 3 {
++		t.Fatalf("getRowCount = %d, want 3", rc)
++	}
++}
++
++// With indentwrap, continuation rows still start at the line's leading
++// indentation, and an exact-fill continuation row occupies exactly one row.
++func TestIndentWrapRows(t *testing.T) {
++	line := "    " + strings.Repeat("x", 100)
++	w := newTestWindow(line+"\n", 40)
++	setBool(w, "wordwrap", false)
++	setBool(w, "indentwrap", true)
++
++	// Row 0 holds chars 0..39; rows 1+ start at the 4-column indent and
++	// hold 36 chars each.
++	cases := []struct {
++		x         int
++		row, visX int
++	}{
++		{0, 0, 0},
++		{40, 1, 4},
++		{76, 2, 4},
++		{104, 2, 32},
++	}
++	for _, c := range cases {
++		v := w.getVLocFromLoc(buffer.Loc{X: c.x, Y: 0})
++		if v.Row != c.row || v.VisualX != c.visX {
++			t.Fatalf("x=%d: got Row=%d VisualX=%d, want Row=%d VisualX=%d", c.x, v.Row, v.VisualX, c.row, c.visX)
++		}
++	}
++	if rc := w.getRowCount(0); rc != 3 {
++		t.Fatalf("getRowCount = %d, want 3", rc)
++	}
++
++	// The last continuation row ends exactly at the indent + content: no
++	// extra row is reported.
++	v := w.getVLocFromLoc(buffer.Loc{X: 104, Y: 0})
++	if rc := v.Row + 1; rc != 3 {
++		t.Fatalf("end of indented line implies %d rows, want 3", rc)
++	}
++}
++
++// Round trips: with wordwrap disabled the mapping must be exactly
++// invertible, including the end of an exact-fill line.
++func TestRoundTripWordWrapOff(t *testing.T) {
++	lines := []string{
++		strings.Repeat("x", 40),           // exact fill
++		strings.Repeat("y", 100),          // multi-row wrap
++		"    " + strings.Repeat("z", 100), // indented wrap
++		"short",
++		"",
++	}
++	w := newTestWindow(strings.Join(lines, "\n")+"\n", 40)
++	setBool(w, "wordwrap", false)
++	setBool(w, "indentwrap", true)
++
++	for y, line := range lines {
++		n := len([]rune(line))
++		for x := 0; x <= n; x++ {
++			v := w.getVLocFromLoc(buffer.Loc{X: x, Y: y})
++			got := w.getLocFromVLoc(v)
++			if got.X != x || got.Y != y {
++				t.Fatalf("line %d x=%d: round trip gave %v (vloc Row=%d VisualX=%d)", y, x, got, v.Row, v.VisualX)
++			}
++		}
++	}
++}
++
++// Clicking on the single row of an exact-fill line maps to the character
++// under (or after) the clicked column, and out-of-range row requests stay
++// within the line.
++func TestLocFromVLocExactFill(t *testing.T) {
++	line := strings.Repeat("x", 40)
++	w := newTestWindow(line+"\nnext line\n", 40)
++	setBool(w, "wordwrap", false)
++	setBool(w, "indentwrap", false)
++
++	cases := []struct {
++		visualX int
++		wantX   int
++	}{
++		{0, 0},
++		{20, 20},
++		{39, 39}, // the last cell of the row
++		{40, 40}, // past the end: end of line
++	}
++	for _, c := range cases {
++		got := w.getLocFromVLoc(VLoc{SLoc: SLoc{Line: 0, Row: 0}, VisualX: c.visualX})
++		if got.X != c.wantX || got.Y != 0 {
++			t.Fatalf("click at visual x=%d: got %v, want {X=%d Y=0}", c.visualX, got, c.wantX)
++		}
++	}
++
++	// A stale request for a row past the end of the line must stay within
++	// the line (end of line), not panic or leak into the next line.
++	if got := w.getLocFromVLoc(VLoc{SLoc: SLoc{Line: 0, Row: 5}, VisualX: 0}); got.Y != 0 || got.X != 40 {
++		t.Fatalf("out-of-range row: got %v, want {40 0}", got)
++	}
++}
++
++// Mouse clicks go through LocFromVisual. Clicking anywhere on the row of
++// an exact-fill line must map into that line — including a click on the
++// last cell, which previously landed on a phantom empty row below it.
++// (The test window has no ruler, so screen x == content column.)
++func TestLocFromVisualExactFillClicks(t *testing.T) {
++	line := strings.Repeat("x", 80)
++	w := newTestWindow("line one\n"+line+"\nafter\n", 80)
++	setBool(w, "wordwrap", true)
++	setBool(w, "indentwrap", true)
++
++	// Window at screen origin, viewport showing line 0 at the top.
++	w.StartLine = SLoc{Line: 0, Row: 0}
++
++	// The exact-fill line is buffer line 1, viewport row 1.
++	cases := []struct {
++		screenX, screenY int
++		wantLine, wantX  int
++	}{
++		{0, 1, 1, 0},   // first content cell
++		{40, 1, 1, 40}, // middle of the row
++		{79, 1, 1, 79}, // last cell of the exact-fill row
++		{79, 2, 2, 5},  // next line's row: "after" -> end of it
++		{79, 0, 0, 8},  // first line: "line one" -> end of it
++	}
++	for _, c := range cases {
++		got := w.LocFromVisual(buffer.Loc{X: c.screenX, Y: c.screenY})
++		if got.Y != c.wantLine || got.X != c.wantX {
++			t.Fatalf("click at %d,%d: got {X=%d Y=%d}, want {X=%d Y=%d}",
++				c.screenX, c.screenY, got.X, got.Y, c.wantX, c.wantLine)
++		}
++	}
++}

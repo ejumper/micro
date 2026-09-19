@@ -1,0 +1,79 @@
+filetype: markdown
+
+detect:
+    filename: "\\.(livemd|md|mkd|mkdn|markdown)$"
+
+rules:
+    # Base layer for normal prose text. Must stay FIRST: micro applies pattern
+    # rules in file order and the last rule to touch a character wins, so every
+    # rule below overrides this one where it matches. Scoped to markdown on
+    # purpose -- the global `default` colorscheme link is left alone so other
+    # filetypes keep their normal text color.
+    - md-normal: ".*"
+
+    # Tables (Github extension)
+    - type: ".*[ :]\\|[ :].*"
+
+    # quotes
+    - statement: "^>.*"
+
+    # Bold+Italic emphasis (must come before bold and italic rules)
+    - bold-italic: "(^|[[:space:]])(\\*\\*\\*[^ *][^*]*\\*\\*\\*)"
+
+    # Bold emphasis
+    - bold-text: "(^|[[:space:]])(__[^ _][^_]*__|\\*\\*[^ *][^*]*\\*\\*)"
+
+    # Italic emphasis
+    - italic-text: "(^|[[:space:]])(_[^ _][^_]*_|\\*[^ *][^*]*\\*)"
+
+    # strike-through
+    - type: "(^|[[:space:]])~~[^ ][^~]*~~"
+
+    # horizontal rules
+    - special: "^(---+|===+|___+|\\*\\*\\*+)\\s*$"
+
+    # headlines
+    # "headline" is h1: the patched build (micro-indentwrap) extends its
+    # underline across the full editor width. h2-h6 keep text-only styling.
+    # h2 and h3-h6 are separate groups so their colors can diverge
+    # (h2 = blue, h3-h6 = bright blue).
+    - headline: "^# ..*"
+    - headline-2: "^#{2} ..*"
+    - headline-3-6: "^#{3,6} ..*"
+
+    # lists
+    - identifier: "^[[:space:]]*[\\*+-] |^[[:space:]]*[0-9]+\\. "
+
+    # misc
+    - preproc: "(\\(([CcRr]|[Tt][Mm])\\)|\\.{3}|(^|[[:space:]])\\-\\-($|[[:space:]]))"
+
+    # links
+    - constant: "\\[[^]]+\\]"
+    - constant: "\\[([^][]|\\[[^]]*\\])*\\]\\([^)]+\\)"
+
+    # images
+    - underlined: "!\\[[^][]*\\](\\([^)]+\\)|\\[[^]]+\\])"
+
+    # urls
+    - underlined: "https?://[^ )>]+"
+
+    # xml/html tags -- opening, closing and self-closing tokens with a valid
+    # XML name (optionally followed by attributes). Only the markup itself is
+    # colored; text between an opening and closing tag keeps whatever markdown
+    # highlighting applies to it. Placed after the url rule so a tag wins over
+    # a bare url inside <a href="http://...">, and before the code regions,
+    # which shield their content from all inline patterns anyway.
+    # NOTE: Go's regexp is RE2 (no backreferences), so the engine cannot check
+    # that the opening and closing tag names actually match -- it matches
+    # syntactically valid tag tokens.
+    - xml-tag: "</?[A-Za-z_][A-Za-z0-9._:-]*(\\s[^<>]*)?/?>"
+
+    - code-block:
+        start: "^```"
+        end: "^```\\s*$"
+        rules: []
+
+    - code-inline:
+        start: "`"
+        end: "`"
+        rules: []

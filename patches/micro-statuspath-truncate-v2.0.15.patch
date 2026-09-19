@@ -1,0 +1,225 @@
+diff --git a/internal/config/settings.go b/internal/config/settings.go
+index b6684a0..1cc5a51 100644
+--- a/internal/config/settings.go
++++ b/internal/config/settings.go
+@@ -99,6 +99,7 @@ var defaultCommonSettings = map[string]any{
+ 	"statusformatl":   "$(filename) $(modified)$(overwrite)($(line),$(col)) $(status.paste)| ft:$(opt:filetype) | $(opt:fileformat) | $(opt:encoding)",
+ 	"statusformatr":   "$(bind:ToggleKeyMenu): bindings, $(bind:ToggleHelp): help",
+ 	"statusline":      true,
++	"statuslinegap":   float64(8),
+ 	"syntax":          true,
+ 	"tabmovement":     false,
+ 	"tabsize":         float64(4),
+diff --git a/internal/display/statusline.go b/internal/display/statusline.go
+index 409f862..87a963e 100644
+--- a/internal/display/statusline.go
++++ b/internal/display/statusline.go
+@@ -3,6 +3,7 @@ package display
+ import (
+ 	"bytes"
+ 	"fmt"
++	"os"
+ 	"regexp"
+ 	"strconv"
+ 	"strings"
+@@ -103,6 +104,92 @@ func (s *StatusLine) FindOpt(opt string) any {
+ 	return "null"
+ }
+ 
++// statusGap returns the minimum number of cells kept between the left and the
++// right statusline content ("statuslinegap" option).
++func (s *StatusLine) statusGap() int {
++	gap := 8
++	switch v := s.win.Buf.Settings["statuslinegap"].(type) {
++	case int:
++		gap = v
++	case float64:
++		gap = int(v)
++	}
++	if gap < 0 {
++		gap = 0
++	}
++	return gap
++}
++
++// expandFormat expands all $() directives in fb via formatter, returning the
++// expanded text. If fb contains a $(filename) directive, fnStart and fnEnd are
++// the byte offsets of its (first) expansion in the result; otherwise both are
++// -1.
++func expandFormat(fb []byte, formatter func([]byte) []byte) ([]byte, int, int) {
++	var out []byte
++	fnStart, fnEnd := -1, -1
++	last := 0
++	for _, loc := range formatParser.FindAllIndex(fb, -1) {
++		out = append(out, fb[last:loc[0]]...)
++		repl := formatter(fb[loc[0]:loc[1]])
++		if bytes.Equal(fb[loc[0]+2:loc[1]-1], []byte("filename")) {
++			fnStart = len(out)
++			out = append(out, repl...)
++			fnEnd = len(out)
++		} else {
++			out = append(out, repl...)
++		}
++		last = loc[1]
++	}
++	out = append(out, fb[last:]...)
++	return out, fnStart, fnEnd
++}
++
++// strWidth returns the display width of a string with tabsize 1.
++func strWidth(str string) int {
++	return util.StringWidth([]byte(str), util.CharacterCount([]byte(str)), 1)
++}
++
++// truncatePathHead shortens a path to fit within maxW display cells while
++// keeping the tail of the path (the file name) readable. $HOME is collapsed
++// to "~" first, then the highest-level parent directories are dropped one at
++// a time, each drop marked with a leading ellipsis:
++//
++//	/home/user/a/b/c/file.md -> ~/a/b/c/file.md -> …/b/c/file.md -> …/c/file.md -> …/file.md
++//
++// "…/<basename>" is the floor: it is returned even when it still exceeds
++// maxW, so the statusline overflows rather than hiding the file name. Paths
++// that already fit, and single-component paths that cannot be shortened,
++// are returned unchanged.
++func truncatePathHead(path string, maxW int) string {
++	if strWidth(path) <= maxW {
++		return path
++	}
++
++	// Step 0: collapse $HOME to "~"
++	if home, err := os.UserHomeDir(); err == nil && home != "" {
++		if rest := strings.TrimPrefix(path, home); len(rest) < len(path) && (len(rest) == 0 || rest[0] == '/') {
++			path = "~" + rest
++			if strWidth(path) <= maxW {
++				return path
++			}
++		}
++	}
++
++	comps := strings.Split(path, "/")
++	if len(comps) < 2 {
++		// Single component: nothing to drop without hiding the name.
++		return path
++	}
++	for i := 1; i < len(comps); i++ {
++		cand := "…/" + strings.Join(comps[i:], "/")
++		if strWidth(cand) <= maxW {
++			return cand
++		}
++	}
++	// Floor: ellipsis plus the file name itself.
++	return "…/" + comps[len(comps)-1]
++}
++
+ var formatParser = regexp.MustCompile(`\$\(.+?\)`)
+ 
+ // Display draws the statusline to the screen
+@@ -169,8 +256,7 @@ func (s *StatusLine) Display() {
+ 		}
+ 	}
+ 
+-	leftText := []byte(s.win.Buf.Settings["statusformatl"].(string))
+-	leftText = formatParser.ReplaceAllFunc(leftText, formatter)
++	leftText, fnStart, fnEnd := expandFormat([]byte(s.win.Buf.Settings["statusformatl"].(string)), formatter)
+ 	rightText := []byte(s.win.Buf.Settings["statusformatr"].(string))
+ 	rightText = formatParser.ReplaceAllFunc(rightText, formatter)
+ 
+@@ -190,6 +276,28 @@ func (s *StatusLine) Display() {
+ 	leftLen := util.StringWidth(leftText, util.CharacterCount(leftText), 1)
+ 	rightLen := util.StringWidth(rightText, util.CharacterCount(rightText), 1)
+ 
++	// If the left content would crowd the right content (or overrun it),
++	// truncate the file path — the $(filename) expansion — dropping the
++	// highest-level parent directories until a minimum gap is restored.
++	// Growing word/character counts shrink the path further rather than
++	// causing an overflow. The path is never shortened below "…/<basename>";
++	// if even that does not fit, the statusline overflows as before.
++	gap := s.statusGap()
++	if leftLen > s.win.Width-rightLen-gap && fnStart >= 0 {
++		restW := util.StringWidth(leftText[:fnStart], util.CharacterCount(leftText[:fnStart]), 1) +
++			util.StringWidth(leftText[fnEnd:], util.CharacterCount(leftText[fnEnd:]), 1)
++		allowed := s.win.Width - rightLen - gap - restW
++		origPath := string(leftText[fnStart:fnEnd])
++		if truncPath := truncatePathHead(origPath, allowed); truncPath != origPath {
++			newLeft := make([]byte, 0, len(leftText)-len(origPath)+len(truncPath))
++			newLeft = append(newLeft, leftText[:fnStart]...)
++			newLeft = append(newLeft, truncPath...)
++			newLeft = append(newLeft, leftText[fnEnd:]...)
++			leftText = newLeft
++			leftLen = util.StringWidth(leftText, util.CharacterCount(leftText), 1)
++		}
++	}
++
+ 	for x := 0; x < s.win.Width; x++ {
+ 		if x < leftLen {
+ 			r, combc, size := util.DecodeCharacter(leftText)
+diff --git a/internal/display/statusline_truncate_test.go b/internal/display/statusline_truncate_test.go
+new file mode 100644
+index 0000000..ae469a6
+--- /dev/null
++++ b/internal/display/statusline_truncate_test.go
+@@ -0,0 +1,43 @@
++package display
++
++import (
++	"os"
++	"testing"
++)
++
++func TestTruncatePathHead(t *testing.T) {
++	home, err := os.UserHomeDir()
++	if err != nil || home == "" {
++		t.Skip("no home directory")
++	}
++	// With home = "/home/ejumps": long width 30, "~/a/bb/ccc/file.md" 18,
++	// "…/a/bb/ccc/file.md" 18, "…/bb/ccc/file.md" 16, "…/ccc/file.md" 13,
++	// "…/file.md" 9.
++	long := home + "/a/bb/ccc/file.md"
++
++	cases := []struct {
++		name string
++		path string
++		maxW int
++		want string
++	}{
++		{"already fits", "/a/b/file.md", 100, "/a/b/file.md"},
++		{"exact fit", "/a/b/file.md", 12, "/a/b/file.md"},
++		{"home collapse fits", long, 18, "~/a/bb/ccc/file.md"},
++		{"home collapse then drop", long, 17, "…/bb/ccc/file.md"},
++		{"drop to last dir", long, 15, "…/ccc/file.md"},
++		{"floor via loop", long, 9, "…/file.md"},
++		{"floor beats tiny max", long, 2, "…/file.md"},
++		{"floor beats zero max", long, 0, "…/file.md"},
++		{"single component", "file.md", 1, "file.md"},
++		{"relative drops", "bb/ccc/file.md", 11, "…/file.md"},
++		{"home-like prefix not collapsed", home + "2/x.md", 6, "…/x.md"},
++	}
++	for _, c := range cases {
++		t.Run(c.name, func(t *testing.T) {
++			if got := truncatePathHead(c.path, c.maxW); got != c.want {
++				t.Errorf("truncatePathHead(%q, %d) = %q, want %q", c.path, c.maxW, got, c.want)
++			}
++		})
++	}
++}
+diff --git a/runtime/help/options.md b/runtime/help/options.md
+index 75923bd..05dfba6 100644
+--- a/runtime/help/options.md
++++ b/runtime/help/options.md
+@@ -455,6 +455,15 @@ Here are the available options:
+ 
+     default value: `true`
+ 
++* `statuslinegap`: minimum number of cells kept between the left-justified
++   and right-justified statusline content. When the left content would crowd
++   the right content, the file path is truncated to fit: `$HOME` is shown as
++   `~`, and the highest parent directories are dropped one at a time and
++   replaced with a leading ellipsis (`…/dir/file.md`). The path is never
++   shortened below `…/file-name`.
++
++    default value: `8`
++
+ * `sucmd`: specifies the super user command. On most systems this is "sudo" but
+    on BSD it can be "doas." This option can be customized and is only used when
+    saving with su.
