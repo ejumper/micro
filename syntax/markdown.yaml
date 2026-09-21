@@ -26,6 +26,18 @@ rules:
     # Italic emphasis
     - italic-text: "(^|[[:space:]])(_[^ _][^_]*_|\\*[^ *][^*]*\\*)"
 
+    # Emphasis DELIMITERS (the *, ** and *** themselves). Must stay AFTER the
+    # three emphasis rules above: micro paints patterns in file order and the
+    # last rule to touch a character wins, so this recolors only the marker
+    # runs while the text between them keeps bold / italic / bold-italic.
+    # Go's regexp is RE2 (no lookbehind/lookahead), so the delimiters cannot
+    # be isolated from a construct match -- matching the runs directly is the
+    # way. It is deliberately placed BEFORE the horizontal-rule, headline and
+    # list rules so a bare `***` rule, `# **heading**` and `* ` bullets keep
+    # their own colors rather than going gray. Go RE2, so `\\*+` = one or
+    # more literal asterisks.
+    - emphasis-marker: "\\*+"
+
     # strike-through
     - type: "(^|[[:space:]])~~[^ ][^~]*~~"
 

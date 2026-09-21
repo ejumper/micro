@@ -11,6 +11,9 @@ color-link italic-text "italic #ffffff"
 color-link bold-text "bold #ffffff"
 color-link bold-italic "bold italic #ffffff"
 color-link md-normal "#f2f2f2,none"
+# emphasis delimiters (*, **, ***) -- dimmed so the markup recedes behind the
+# emphasized text, which stays pure white (see italic/bold links above).
+color-link emphasis-marker "#a8a8a8,none"
 # markdown headers: bold+italic+underlined; h1 additionally gets a full-row
 # underline fill from the patched micro build. h2 keeps the plain blue, h3-h6
 # use bright blue (ANSI 12).
