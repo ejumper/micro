@@ -45,13 +45,16 @@ rules:
     - special: "^(---+|===+|___+|\\*\\*\\*+)\\s*$"
 
     # headlines
-    # "headline" is h1: the patched build (micro-indentwrap) extends its
-    # underline across the full editor width. h2-h6 keep text-only styling.
-    # h2 and h3-h6 are separate groups so their colors can diverge
-    # (h2 = blue, h3-h6 = bright blue).
+    # "headline" is h1, "headline-2" is h2: the patched build (micro-indentwrap)
+    # extends their fill across the full editor width -- h1 gets the blue
+    # background, h2 the underline (see mdFillStyle in the patch). h3 keeps a
+    # text-only underline; h4-h6 have no underline. Separate groups per level
+    # so their styles can diverge and so the patch can tell h1 from h2 by the
+    # first character's group.
     - headline: "^# ..*"
     - headline-2: "^#{2} ..*"
-    - headline-3-6: "^#{3,6} ..*"
+    - headline-3: "^#{3} ..*"
+    - headline-4-6: "^#{4,6} ..*"
 
     # lists
     - identifier: "^[[:space:]]*[\\*+-] |^[[:space:]]*[0-9]+\\. "

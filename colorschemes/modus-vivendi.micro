@@ -14,12 +14,16 @@ color-link md-normal "#f2f2f2,none"
 # emphasis delimiters (*, **, ***) -- dimmed so the markup recedes behind the
 # emphasized text, which stays pure white (see italic/bold links above).
 color-link emphasis-marker "#a8a8a8,none"
-# markdown headers: bold+italic+underlined; h1 additionally gets a full-row
-# underline fill from the patched micro build. h2 keeps the plain blue, h3-h6
-# use bright blue (ANSI 12).
-color-link headline "bold italic underline blue"
-color-link headline-2 "bold italic underline blue"
-color-link headline-3-6 "bold italic underline brightblue"
+# markdown headers. h1 = bright white (#ffffff in wezterm) on an ANSI blue
+# background that the patched micro build extends to the end of the row, no
+# underline. h2 = bright blue text, underlined with the row fill extending to
+# the end of the row. h3 = bright blue, underline only under the text.
+# h4-h6 = bright blue, no underline. The patch copies fg/bg/underline from
+# these links for its row fill, so text and fill always agree.
+color-link headline "bold italic brightwhite,blue"
+color-link headline-2 "bold italic underline brightblue"
+color-link headline-3 "bold italic underline brightblue"
+color-link headline-4-6 "bold italic brightblue"
 # fenced code blocks + inline code: ANSI green
 color-link code-inline "green,none"
 color-link code-block "green,none"

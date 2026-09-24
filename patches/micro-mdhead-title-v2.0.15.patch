@@ -1,58 +1,80 @@
 diff --git a/internal/display/bufwindow.go b/internal/display/bufwindow.go
-index b059368..7703f57 100644
+index b059368..1f77ab4 100644
 --- a/internal/display/bufwindow.go
 +++ b/internal/display/bufwindow.go
 @@ -511,6 +511,7 @@ func (w *BufWindow) displayBuffer() {
  		bline := b.LineBytes(bloc.Y)
  		blineLen := util.CharacterCount(bline)
  		wrapIndent := 0
-+		mdH1Line := isMdH1Line(b, bloc.Y)
++		mdFillGroup := mdFillGroupFor(b, bloc.Y)
  		if softwrap {
  			wrapIndent = w.wrapIndentWidth(bline, tabsize)
  		}
-@@ -741,6 +742,16 @@ func (w *BufWindow) displayBuffer() {
+@@ -741,6 +742,20 @@ func (w *BufWindow) displayBuffer() {
  				vloc.X = w.gutterOffset
  			}
  			drawVirtualIndent()
-+			// Pre-fill the rest of the wrapped row with the h1 style;
-+			// content drawn afterwards overwrites it cell by cell, so any
-+			// leftover cells keep the underline fill.
-+			if mdH1Line {
-+				h1Style := mdH1FillStyle()
-+				for vloc.X < maxWidth {
-+					screen.SetContent(w.X+vloc.X, w.Y+vloc.Y, ' ', nil, h1Style)
-+					vloc.X++
++			// Pre-fill the rest of the wrapped row with the heading fill
++			// style (h1: blue background, h2: underline); content drawn
++			// afterwards overwrites it cell by cell, so any leftover cells
++			// keep the fill.
++			if mdFillGroup != "" {
++				// Fill the row without advancing vloc.X. The glyph loop
++				// resumes at vloc.X after wrap() returns; advancing it here
++				// would push the wrapped remainder of the heading past the
++				// right edge, so it would never be drawn (invisible text).
++				fillStyle := mdFillStyle(mdFillGroup)
++				for x := vloc.X; x < maxWidth; x++ {
++					screen.SetContent(w.X+x, w.Y+vloc.Y, ' ', nil, fillStyle)
 +				}
 +			}
  		}
  
  		type glyph struct {
-@@ -842,6 +853,9 @@ func (w *BufWindow) displayBuffer() {
+@@ -792,8 +807,15 @@ func (w *BufWindow) displayBuffer() {
+ 
+ 			// If a word (or just a wide rune) does not fit in the window
+ 			if vloc.X+wordwidth > maxWidth && vloc.X > rowStartX {
++				// Keep a heading's fill (h1 background / h2 underline) in the
++				// cells the pushed word leaves behind, so the fill still
++				// reaches the right edge on word-wrapped rows.
++				fillRest := config.DefStyle
++				if mdFillGroup != "" {
++					fillRest = mdFillStyle(mdFillGroup)
++				}
+ 				for vloc.X < maxWidth {
+-					draw(' ', nil, config.DefStyle, false, false, true)
++					draw(' ', nil, fillRest, false, false, true)
+ 				}
+ 
+ 				// We either stop or we wrap to draw the word in the next line
+@@ -842,6 +864,9 @@ func (w *BufWindow) displayBuffer() {
  		}
  
  		style := config.DefStyle
-+		if mdH1Line {
-+			style = mdH1FillStyle()
++		if mdFillGroup != "" {
++			style = mdFillStyle(mdFillGroup)
 +		}
  		for _, c := range cursors {
  			if b.Settings["cursorline"].(bool) && w.active &&
  				!c.HasSelection() && c.Y == bloc.Y {
-@@ -864,7 +878,13 @@ func (w *BufWindow) displayBuffer() {
+@@ -864,7 +889,14 @@ func (w *BufWindow) displayBuffer() {
  
  		if vloc.X != maxWidth {
  			// Display newline within a selection
 -			drawrune, drawstyle, preservebg := getRuneStyle(' ', config.DefStyle, 0, totalwidth, true)
 +			eolStyle := config.DefStyle
-+			if mdH1Line {
-+				// Use the h1 style for the newline cell too so the underline
-+				// is continuous with the trailing fill (no gap after the text)
-+				eolStyle = mdH1FillStyle()
++			if mdFillGroup != "" {
++				// Use the fill style for the newline cell too so the
++				// background/underline is continuous with the trailing fill
++				// (no gap after the text)
++				eolStyle = mdFillStyle(mdFillGroup)
 +			}
 +			drawrune, drawstyle, preservebg := getRuneStyle(' ', eolStyle, 0, totalwidth, true)
  			draw(drawrune, nil, drawstyle, true, true, preservebg)
  		}
  
-@@ -938,3 +958,47 @@ func (w *BufWindow) Display() {
+@@ -938,3 +970,60 @@ func (w *BufWindow) Display() {
  	w.displayScrollBar()
  	w.displayBuffer()
  }
@@ -72,31 +94,44 @@ index b059368..7703f57 100644
 +	return 0
 +}
 +
-+// isMdH1Line reports whether buffer line y is a markdown h1 heading that
-+// should get the full-row underline fill. The syntax engine's group for the
-+// first character must be "headline" — this excludes lines inside fenced
-+// code blocks, which the regex alone cannot do.
-+func isMdH1Line(b *buffer.Buffer, y int) bool {
++// mdFillGroupFor returns the colorscheme group whose style should fill the
++// rest of a markdown heading line so the fill spans the full editor width:
++// "headline" for h1 (blue background), "headline-2" for h2 (underline), or
++// "" for lines that get no fill. The syntax engine's group for the first
++// character must match the heading level — this excludes lines inside
++// fenced code blocks, which the regex alone cannot do.
++func mdFillGroupFor(b *buffer.Buffer, y int) string {
 +	if ft, ok := b.Settings["filetype"].(string); !ok || ft != "markdown" {
-+		return false
++		return ""
 +	}
-+	if mdHeaderLevel(b.LineBytes(y)) != 1 {
-+		return false
++	level := mdHeaderLevel(b.LineBytes(y))
++	if level < 1 || level > 2 {
++		return ""
++	}
++	want := "headline"
++	if level == 2 {
++		want = "headline-2"
 +	}
 +	group, ok := b.Match(y)[0]
-+	return ok && group.String() == "headline"
++	if !ok || group.String() != want {
++		return ""
++	}
++	return want
 +}
 +
-+// mdH1FillStyle is the style used to pad the rest of an h1 line so its
-+// underline spans the full editor width. The foreground color follows the
-+// "headline" colorscheme group, defaulting to blue (ANSI SGR 34).
-+func mdH1FillStyle() tcell.Style {
-+	style := config.DefStyle.Underline(true)
-+	if s, ok := config.Colorscheme["headline"]; ok {
-+		fg, _, _ := s.Decompose()
-+		style = style.Foreground(fg)
-+	} else {
-+		style = style.Foreground(tcell.ColorBlue)
++// mdFillStyle is the style used to pad the rest of a heading line. It
++// copies the foreground, background and underline flag from the heading's
++// colorscheme group, so text and fill always agree — changing the
++// color-link changes both. A group missing from the colorscheme falls back
++// to the default style (no visible fill).
++func mdFillStyle(group string) tcell.Style {
++	style := config.DefStyle
++	if s, ok := config.Colorscheme[group]; ok {
++		fg, bg, attrs := s.Decompose()
++		style = style.Foreground(fg).Background(bg)
++		if attrs&tcell.AttrUnderline != 0 {
++			style = style.Underline(true)
++		}
 +	}
 +	return style
 +}
