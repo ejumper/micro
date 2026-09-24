@@ -23,14 +23,14 @@ patches in `patches/` (applied in alphabetical order).
 
 : Applies on top of the indentwrap patch. Two changes:
   - Markdown h1 lines (`# ` + at least one character of content) get their
-    trailing padding — and softwrap continuation rows — drawn with an
-    underline in the `headline` colorscheme foreground, so the underline
-    spans the full editor width with no gap after the text. The newline
-    cell is styled too. Detection requires the syntax engine to classify
-    the line's first character as the "headline" group, so `#` lines inside
-    fenced code blocks are excluded. h2–h6 are styled text-only via the
-    syntax file/colorscheme (no patch needed for those). Fill color follows
-    `color-link headline`, defaulting to blue.
+    trailing padding — and softwrap continuation rows — painted with the h1
+    blue background; h2 lines get the same full-row fill as an underline
+    (bright blue text). The newline cell is styled too. Detection requires
+    the syntax engine to classify the line's first character as the
+    "headline" (h1) or "headline-2" (h2) group, so `#` lines inside fenced
+    code blocks are excluded. h3–h6 are styled text-only via the syntax
+    file/colorscheme (no patch needed for those). The fill copies
+    fg/bg/underline from the matching color-link.
   - Sets the terminal window/tab title to plain `micro` by emitting OSC 0
     directly after screen init (the vendored tcell fork has no `SetTitle`).
     The title no longer derives from the binary name.
