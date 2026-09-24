@@ -250,9 +250,13 @@ def check(g):
         ("code here", "idx:2", "", "inline code = ANSI green"),
         ("# not a heading inside a fence", "idx:2", "", "fenced code = ANSI green"),
         ("<div>not a tag inside a fence</div>", "idx:2", "", "tag inside fence stays green"),
-        ("<note>", "idx:4", "", "xml tag = ANSI blue"),
-        ("</note>", "idx:4", "", "closing xml tag = ANSI blue"),
-        ("<br/>", "idx:4", "", "self-closing tag = ANSI blue"),
+        ("| :------ | ------: |", "idx:7", "", "table separator row = ANSI white"),
+        ("|", "idx:7", "", "table pipe = ANSI white"),
+        ("col a", "rgb:242,242,242", "", "table cell text = normal prose"),
+        ("well-known", "rgb:242,242,242", "", "hyphen in cell = normal prose"),
+        ("<note>", "idx:12", "", "xml tag = ANSI bright blue"),
+        ("</note>", "idx:12", "", "closing xml tag = bright blue"),
+        ("<br/>", "idx:12", "", "self-closing tag = bright blue"),
     ]
     for needle, want_fg, want_attr, label in expectations:
         r = find_row(g, needle)

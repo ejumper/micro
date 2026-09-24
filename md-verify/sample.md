@@ -31,7 +31,8 @@ Math like a < b and c > d must not match.
 [a link](http://example.com) and bare https://example.org here.
 
 | col a | col b |
-| ----- | ----- |
+| :------ | ------: |
+| well-known | x |
 
 > a blockquote with `code` and <b>a tag</b>
 

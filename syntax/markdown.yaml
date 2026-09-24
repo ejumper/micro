@@ -11,8 +11,16 @@ rules:
     # filetypes keep their normal text color.
     - md-normal: ".*"
 
-    # Tables (Github extension)
-    - type: ".*[ :]\\|[ :].*"
+    # Tables (Github extension). Only the border characters are painted:
+    # cell text keeps the normal prose color from the md-normal base layer
+    # (and emphasis/links/code still win inside cells, as everywhere).
+    # Go RE2: \\| is a literal pipe.
+    - table-border: "\\|"
+    # Separator rows (| --- | :--: |) consist of nothing but border chars,
+    # so paint the whole row -- but require a pipe, so plain prose dashes
+    # and bare --- horizontal rules are left alone (the hr rule further
+    # below still wins on bare --- lines: last match takes the character).
+    - table-border: "^[|:_ -]*\\|[|:_ -]*$"
 
     # quotes
     - statement: "^>.*"

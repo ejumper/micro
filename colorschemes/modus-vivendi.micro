@@ -27,8 +27,12 @@ color-link headline-4-6 "bold italic brightblue"
 # fenced code blocks + inline code: ANSI green
 color-link code-inline "green,none"
 color-link code-block "green,none"
-# xml/html tag markup (<tag>, </tag>, <tag/>): ANSI blue
-color-link xml-tag "blue,none"
+# xml/html tag markup (<tag>, </tag>, <tag/>): ANSI bright blue
+color-link xml-tag "brightblue,none"
+# markdown table borders (pipes + separator-row - : _ runs): ANSI white
+# (SGR 37, palette 7). Cell text is NOT painted here -- it keeps the normal
+# prose color from the md-normal base layer (rules only match border chars).
+color-link table-border "white,none"
 
 color-link keyword "bold #feacd0,none"
 color-link statement "bold #feacd0,none"
